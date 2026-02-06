@@ -554,7 +554,6 @@ def collect_vllm(num_processes: int, ops: list[str] | None = None):
             "get_func": "get_moe_test_cases",
             "run_func": "run_moe_torch",
         },
-        # TODO sihan: recheck whether MLA supported on XPU
         {
             "name": "vllm",
             "type": "mla_context",
@@ -570,6 +569,13 @@ def collect_vllm(num_processes: int, ops: list[str] | None = None):
             "run_func": "run_attention_torch",
         },
     ]
+
+    if torch.xpu.is_available():
+        # xpu's MLA kernel is WIP
+        collections = [
+            c for c in collections
+            if "mla" not in c.get("type", "").lower()
+        ]
 
     all_errors = collect_ops(num_processes, collections, ops, version)
 
@@ -600,13 +606,6 @@ def collect_trtllm(num_processes: int, ops: list[str] | None = None):
     # Define collection modules - each test type as separate entry
     collections = [
         # GEMM collections
-        {
-            "name": "trtllm",
-            "type": "gemm_trt",
-            "module": "collector.trtllm.collect_gemm_trt",
-            "get_func": "get_gemm_test_cases",
-            "run_func": "run_gemm",
-        },
         {
             "name": "trtllm",
             "type": "gemm",
@@ -677,7 +676,7 @@ def collect_trtllm(num_processes: int, ops: list[str] | None = None):
             else "collector.trtllm.collect_moe_pre_1_0"
             if v.startswith(("0.21.0", "1.0.0"))
             else "collector.trtllm.collect_moe"
-            if v.startswith(("1.1.0", "1.2.0"))
+            if v.startswith(("1.1.0", "1.2.0", "1.3.0"))
             else None,
         },
     ]
@@ -742,7 +741,6 @@ def main():
         nargs="*",
         type=str,
         choices=[
-            "gemm_trt",
             "gemm",
             "mla_context",
             "mla_generation",

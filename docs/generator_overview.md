@@ -14,16 +14,22 @@ flowchart TD
 ```
 
 ### Key Components
-- Deployment schema (`config/deployment_config.yaml`):  
+- Deployment schema (`config/deployment_config.yaml`):
   ```
   inputs:
     - key: ServiceConfig.port
     - key: ServiceConfig.served_model_name
     - key: K8sConfig.k8s_image
+    - key: K8sConfig.k8s_model_cache
+    - key: K8sConfig.k8s_hf_home
     - key: WorkerConfig.prefill_workers
     - key: SlaConfig.isl
   ```
-  Defines the deployment-facing inputs beyond backend flags: service ports and names, per-node GPU counts, K8s image/namespace/engine mode, and SLA knobs like ISL/OSL.
+  Defines the deployment-facing inputs beyond backend flags: service ports and names, per-node GPU counts, K8s image/namespace/engine mode, model cache PVC, HuggingFace home directory, and SLA knobs like ISL/OSL.
+
+  **Model Cache Configuration:**
+  - `k8s_model_cache`: Name of the PersistentVolumeClaim (PVC) to mount for caching HuggingFace models. The PVC is mounted at `/workspace/model_cache` in worker pods.
+  - `k8s_hf_home`: (Optional) Path to set as the `HF_HOME` environment variable in worker pods. When `k8s_model_cache` is configured but `k8s_hf_home` is not explicitly set, it automatically defaults to `/workspace/model_cache` (the PVC mount point). This ensures HuggingFace libraries download models to the persistent volume instead of ephemeral storage.
 
 - Backend parameter mapping (`config/backend_config_mapping.yaml`):  
   ```
@@ -47,6 +53,8 @@ flowchart TD
   prefill max_batch_size = (max_batch_size if max_batch_size else 1)
   ```
   DSL rules users can extend to influence generated configs. Field names come from `backend_config_mapping.yaml` and `deployment_config.yaml`; prefixes like `agg_`, `prefill_`, and `decode_` scope the impact to that role’s generated outputs.
+  
+  **Rule selection**: Use `--generator-set rule=benchmark` to switch to a different rule plugin folder under `src/aiconfigurator/generator/rule_plugin/`. If `rule` is not provided, the default production rules are used (tuned for deployment, including max batch size and CUDA graph batch size adjustments). The `benchmark` rules are designed to align generated configs with AIC simulation, using broader CUDA graph batch sizes and a stricter max batch size derived from the simulated batch size. You can add your own rule sets by creating a folder under `rule_plugin/` and selecting it via `--generator-set rule=<folder_name>`.
 
 - Backend templates (`config/backend_templates/<backend>/`):  
   Jinja templates that turn mapped parameters into CLI args, engine configs, run scripts, and Kubernetes manifests (optionally versioned). 
@@ -57,8 +65,8 @@ You can use the generator in three ways: AIConfigurator CLI, webapp, or standalo
   ```
   aiconfigurator cli default \
     --backend sglang \
-    --backend_version 0.5.1.post1 \
-    --model QWEN3_32B \
+    --backend_version 0.5.6.post2 \
+    --model_path Qwen/Qwen3-32B \
     --system h200_sxm \
     --total_gpus 8 \
     --isl 5000 --osl 1000 --ttft 2000 --tpot 50 \
@@ -93,9 +101,10 @@ You can use the generator in three ways: AIConfigurator CLI, webapp, or standalo
             "mode": "disagg",
             "enable_router": True,
             "k8s_namespace": "dynamo",
-            "k8s_image": "nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.7.0",
+            "k8s_image": "nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.8.0",
             "k8s_engine_mode": "configmap",
             "k8s_model_cache": "pvc:model-cache-7b",
+            "k8s_hf_home": "/workspace/model_cache",  # Optional: HF_HOME env var for workers (defaults to /workspace/model_cache when k8s_model_cache is set)
         },
         "Workers": {
             "prefill": {"tensor_parallel_size": 4, "max_batch_size": 8},
@@ -105,9 +114,9 @@ You can use the generator in three ways: AIConfigurator CLI, webapp, or standalo
     }
 
     params = generate_config_from_input_dict(input_params, backend="trtllm")
-    artifacts = generate_backend_artifacts(params, backend="trtllm", output_dir="./results/sample", backend_version="1.2.0rc3")
+    artifacts = generate_backend_artifacts(params, backend="trtllm", output_dir="./results/sample", backend_version="1.2.0rc5")
     ```
-  - Command line: `python -m aiconfigurator.generator.main render-artifacts --backend trtllm --version 1.2.0rc3 --config sample_input.yaml --output ./results`
+  - Command line: `python -m aiconfigurator.generator.main render-artifacts --backend trtllm --version 1.2.0rc5 --config sample_input.yaml --output ./results`
     ```
     # Sample sample_input.yaml
     
@@ -118,7 +127,7 @@ You can use the generator in three ways: AIConfigurator CLI, webapp, or standalo
       port: 8000
     K8sConfig:
       k8s_namespace: dynamo
-      k8s_image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.7.1
+      k8s_image: nvcr.io/nvidia/ai-dynamo/tensorrtllm-runtime:0.8.0
     WorkerConfig:
       prefill_workers: 1
       decode_workers: 1
@@ -138,7 +147,64 @@ You can use the generator in three ways: AIConfigurator CLI, webapp, or standalo
 
 ### Generated Outputs
 - [vllm & sglang] CLI argument strings per role (prefill/decode/agg) for debugging or manual runs.
-- [trtllm] Engine config files (prefill/decode/agg) when the backend provides `extra_engine_args*.j2`.
+- [trtllm] Engine config files (`agg_config.yaml`, `prefill_config.yaml`, `decode_config.yaml`) when the backend provides `extra_engine_args*.j2`.
 - Run scripts (`run_0.sh`, `run_1.sh`, …) that assign workers to nodes and toggle frontend on the first node.
-- Kubernetes manifest (`k8s_deploy.yaml`) with images, namespace, volumes, engine args (inline or ConfigMap), and role-specific settings. 
+- Kubernetes manifest (`k8s_deploy.yaml`) with images, namespace, volumes, engine args (inline or ConfigMap), and role-specific settings.
 
+### TRT-LLM Deployment Notes
+When deploying with TRT-LLM, the generated run scripts (`run_x.sh`) reference engine config files at `/workspace/engine_configs/`. Before executing the run scripts, you must:
+
+1. Create the engine configs directory:
+   ```bash
+   mkdir -p /workspace/engine_configs
+   ```
+
+2. Copy the generated engine config files to this location:
+   ```bash
+   # For aggregated mode:
+   cp agg_config.yaml /workspace/engine_configs/
+   
+   # For disaggregated mode:
+   cp prefill_config.yaml decode_config.yaml /workspace/engine_configs/
+   ```
+
+3. Execute the run script:
+   ```bash
+   bash run_0.sh
+   ```
+
+Refer to the [Dynamo Deployment Guide](dynamo_deployment_guide.md) for detailed deployment instructions. 
+
+### Generator Validator
+The generator validator checks that generated engine configs or CLI args are accepted by the backend runtime version. It parses the generated output using each backend's argument schema and reports unknown or invalid flags early.
+
+**Usage (run inside the matching runtime image):**
+- TRT-LLM runtime image (e.g. `tensorrtllm-runtime`):
+  ```
+  python -m aiconfigurator/tools/generator_validator/validator.py \
+    --backend trtllm \
+    --path /path/to/results
+  ```
+- vLLM runtime image:
+  ```
+  python -m aiconfigurator/tools/generator_validator/validator.py \
+    --backend vllm \
+    --path /path/to/results
+  ```
+- SGLang runtime image:
+  ```
+  python -m aiconfigurator/tools/generator_validator/validator.py \
+    --backend sglang \
+    --path /path/to/results
+  ```
+
+**`--path` meaning (file or directory):**
+- File: point directly to a single engine config YAML (TRT-LLM) or `k8s_deploy.yaml` (vLLM/SGLang).
+- Directory: point to a generator results root with the expected layout:
+  - TRT-LLM: `agg/top1/agg_config.yaml` and `disagg/top1/{decode,prefill}_config.yaml`
+  - vLLM / SGLang: `agg/top1/k8s_deploy.yaml` and `disagg/top1/k8s_deploy.yaml`
+
+**How it works (high level):**
+- TRT-LLM: loads `tensorrt_llm.llmapi.llm_args.TorchLlmArgs` and validates keys against the runtime schema.
+- vLLM: loads `vllm.engine.arg_utils.EngineArgs` and parses CLI args to build an engine config.
+- SGLang: loads `sglang.srt.server_args.ServerArgs` and parses CLI args found in the generated Kubernetes manifest.

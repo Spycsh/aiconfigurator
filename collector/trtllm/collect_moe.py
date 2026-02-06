@@ -4,6 +4,7 @@
 import glob
 import json
 import os
+from types import SimpleNamespace
 
 import tensorrt_llm
 import torch
@@ -11,8 +12,13 @@ from tensorrt_llm._torch.autotuner import AutoTuner, autotune
 from tensorrt_llm._torch.model_config import ModelConfig
 from tensorrt_llm._torch.models.modeling_deepseekv3 import DeepseekV3Gate
 from tensorrt_llm._torch.modules.fused_moe import RenormalizeMoeRoutingMethod, create_moe
+from tensorrt_llm._torch.utils import ActivationType
 from tensorrt_llm.mapping import Mapping
 from tensorrt_llm.models.modeling_utils import QuantAlgo, QuantConfig
+
+# Models that use non-gated MoE (Relu2 activation instead of SwiGLU)
+# These are substring patterns that will be matched against the full model name
+NON_GATED_MOE_MODELS = ["Nemotron-3"]
 
 try:
     from common_test_cases import get_common_moe_test_cases
@@ -102,7 +108,7 @@ def get_moe_test_cases():
         moe_tp = common_moe_testcase.tp
 
         for moe_type in moe_list:
-            if model_name in ["GPT_OSS_20B", "GPT_OSS_120B"]:
+            if model_name in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
                 if moe_type != "w4a16_mxfp4":
                     continue
             else:
@@ -207,7 +213,16 @@ def run_moe_torch(
     mapping.moe_ep_size = moe_ep_size
     mapping.moe_tp_size = moe_tp_size
 
-    model_config = ModelConfig()
+    # Create a minimal pretrained_config with required attributes for TensorRT-LLM 1.3+
+    # The CommunicationFactory.create_strategy() accesses model_config.pretrained_config.hidden_size
+    pretrained_config = SimpleNamespace(
+        hidden_size=hidden_size,
+        intermediate_size=inter_size,
+        num_experts=num_experts,
+        torch_dtype=torch.bfloat16,
+    )
+
+    model_config = ModelConfig(pretrained_config=pretrained_config)
     model_config.mapping = mapping
     model_config.quant_config = quant_config
     model_config.moe_max_num_tokens = num_tokens_lists[-1]  # to avoid multi-chunk auxi stream in cuda-graph mode.
@@ -215,7 +230,17 @@ def run_moe_torch(
     swiglu_beta = None
     swiglu_limit = None
 
-    if model_name in ["GPT_OSS_120B", "GPT_OSS_20B"]:
+    # Determine activation type based on model
+    # Nemotron-3 Nano uses non-gated MoE with Relu2 activation
+    # Other models (DeepSeek, Qwen, Mixtral) use gated MoE with SwiGLU activation
+    if any(pattern in model_name for pattern in NON_GATED_MOE_MODELS):
+        activation_type = ActivationType.Relu2
+        is_gated = False
+    else:
+        activation_type = ActivationType.Swiglu
+        is_gated = True
+
+    if model_name in ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]:
         # use triton backend for best performance on Hopper
         model_config.moe_backend = "triton"
         swiglu_alpha = torch.tensor([1.702] * (num_experts // moe_ep_size), dtype=torch.float32).to(
@@ -266,6 +291,7 @@ def run_moe_torch(
         swiglu_alpha=swiglu_alpha,
         swiglu_beta=swiglu_beta,
         swiglu_limit=swiglu_limit,
+        activation_type=activation_type,
     )
     moe.to(torch.device(device))
 
@@ -411,8 +437,10 @@ def run_moe_torch(
 
         if min_latency_mode:
             source = "moe_torch_flow_min_latency"  # trtllm gen
+        elif not is_gated:
+            source = "moe_torch_flow_nongated"  # non-gated MoE (relu2)
         else:
-            source = "moe_torch_flow"  # cutlass
+            source = "moe_torch_flow"  # cutlass (gated SwiGLU)
 
         log_perf(
             item_list=[

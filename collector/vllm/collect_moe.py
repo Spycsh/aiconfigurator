@@ -5,7 +5,6 @@ import os
 
 import torch
 import torch.nn.functional as F
-from common_test_cases import get_common_moe_test_cases
 from vllm.model_executor.layers.fused_moe import fused_experts
 try:
     from vllm.model_executor.layers.fused_moe.config import fp8_w8a8_moe_quant_config
@@ -26,7 +25,8 @@ except Exception:
     except Exception:
         per_block_cast_to_fp8 = None  # type: ignore[assignment]
 
-from helper import balanced_logits, benchmark_with_power, get_sm_version, log_perf, power_law_logits_v3
+from collector.common_test_cases import get_common_moe_test_cases
+from collector.helper import balanced_logits, benchmark_with_power, get_sm_version, log_perf, power_law_logits_v3
 
 if torch.xpu.is_available():
     try:
@@ -37,7 +37,7 @@ if torch.xpu.is_available():
 
 aic_debug = int(os.getenv("aic_moe_debug", "0"))  # noqa: SIM112
 
-compatible_version = ["0.11.0", "0.12.0"]
+compatible_version = ["0.11.0", "0.12.0", "0.14.0"]
 
 
 def get_moe_test_cases():
@@ -57,7 +57,7 @@ def get_moe_test_cases():
             continue
 
         model_name = common_moe_testcase.model_name
-        if model_name in ["GPT_OSS_20B", "GPT_OSS_120B"]:
+        if model_name in ["openai/gpt-oss-20b", "openai/gpt-oss-120b"]:
             continue
 
         # vllm does not support TP when EP is enabled.
@@ -322,7 +322,7 @@ if __name__ == "__main__":
     test_cases = get_moe_test_cases()
     print(f"Total test cases: {len(test_cases)}")
 
-    for test_case in test_cases:
+    for test_case in test_cases[:4]:
         print(f"Running test case: {test_case}")
         try:
             run_moe_torch(*test_case)
