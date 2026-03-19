@@ -106,7 +106,7 @@ def agg_pareto(
             for overwritten_runtime_config in runtime_configs_to_evaluate:
                 summary = sess.find_best_agg_result_under_constraints(
                     runtime_config=overwritten_runtime_config,
-                    top_k=10,
+                    top_k=-1,
                     max_batch_size=512,
                     ctx_stride=512,
                 )
@@ -137,7 +137,8 @@ def agg_pareto(
             )
             exceptions.append(e)
             continue
-
+    breakpoint()
+    print(results_df.loc[(results_df['bs'] == 8) & (results_df['tp'] == 2)].sort_values(by="seq/s", ascending=False)['tpot'].iloc[0])
     if not results_df.empty:
         results_df = results_df.drop_duplicates(ignore_index=True)
         results_df = results_df.sort_values(by="tokens/s/gpu", ascending=False).reset_index(drop=True)
