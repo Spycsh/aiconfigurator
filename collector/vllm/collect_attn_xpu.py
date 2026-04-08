@@ -6,6 +6,7 @@ __compat__ = "vllm>=0.11.0"
 import os
 
 import torch
+
 import vllm
 
 try:
@@ -397,7 +398,6 @@ def get_context_attention_test_cases(if_unit_test=False):
         # narrow down the search space for xpu currently
         b_list = [1, 2, 4, 8, 16, 32]
         s_list = [
-            1,
             16,
             32,
             64,
@@ -491,7 +491,7 @@ def get_generation_attention_test_cases():
         65536,
         131072,
     ]
-    n_kv_list = [1, 2, 4, 8]
+    n_kv_list = [4, 8]
 
     # kv cache dtype fp8 to be supported
     kv_cache_dtype_list = [False, True]

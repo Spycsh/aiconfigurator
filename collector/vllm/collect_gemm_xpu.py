@@ -106,7 +106,9 @@ def run_gemm(exit_stack, gemm_type, m, n, k, perf_filename, device="xpu:0"):
     # Force DeepGEMM path when available to capture the intended kernel.
     os.environ["VLLM_USE_DEEP_GEMM"] = "1"
 
-    setup_distributed(device)
+    vllm_cfg = VllmConfig()
+    with set_current_vllm_config(vllm_cfg):
+        setup_distributed(device)
 
     dtype = torch.float16
     torch.set_default_dtype(dtype)
@@ -143,7 +145,9 @@ def run_gemm(exit_stack, gemm_type, m, n, k, perf_filename, device="xpu:0"):
             disable_tp=True,
         )
         # TODO, to evaluate random weights impact
-        gemm.to(torch.device(device))
+        gemm = gemm.to_empty(device=torch.device(device))
+        with torch.no_grad():
+            gemm.weight.copy_(torch.randn((n, k), dtype=dtype, device=device))
 
         if gemm_type == "fp8" and hasattr(gemm, "weight"):
             # Use process_weights_after_loading() to quantize the weights after creation
@@ -176,7 +180,7 @@ def run_gemm(exit_stack, gemm_type, m, n, k, perf_filename, device="xpu:0"):
 
         return gemm
 
-    exit_stack.enter_context(set_current_vllm_config(VllmConfig()))
+    exit_stack.enter_context(set_current_vllm_config(vllm_cfg))
 
     outside_loop_count = 6
     op_list = []

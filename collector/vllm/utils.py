@@ -11,13 +11,13 @@ from dataclasses import dataclass
 from functools import wraps
 from typing import Optional, Union
 
+import pydantic_core
 import torch
 
 try:
     from vllm.attention.backends.registry import AttentionBackendEnum
 except ImportError:
     AttentionBackendEnum = None  # type: ignore
-from vllm import _custom_ops as ops
 from vllm.config import (
     CacheConfig,
     CompilationConfig,
@@ -29,6 +29,8 @@ from vllm.config import (
     VllmConfig,
     set_current_vllm_config,
 )
+
+from vllm import _custom_ops as ops
 
 try:
     from vllm.config.model import ModelDType
@@ -262,11 +264,19 @@ def create_vllm_config(
         max_model_len=max_model_len,
     )
 
-    cache_config = CacheConfig(
-        block_size=block_size,
-        cache_dtype="fp8" if use_fp8_kv_cache else "auto",
-        swap_space=0,
-    )
+    # https://github.com/vllm-project/vllm/pull/36216 deprecate the usage of swap_space
+    try:
+        cache_config = CacheConfig(
+            block_size=block_size,
+            cache_dtype="fp8" if use_fp8_kv_cache else "auto",
+            swap_space=0,
+        )
+    except pydantic_core._pydantic_core.ValidationError:
+        cache_config = CacheConfig(
+            block_size=block_size,
+            cache_dtype="fp8" if use_fp8_kv_cache else "auto",
+        )
+
     # Set cache blocks for testing
     #   (these may be set during initialization normally)
     cache_config.num_gpu_blocks = num_gpu_blocks
