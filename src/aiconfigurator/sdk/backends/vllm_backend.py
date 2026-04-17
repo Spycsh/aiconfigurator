@@ -42,6 +42,7 @@ class VLLMBackend(BaseBackend):
         ctx_seq_imbalance_correction_scale = runtime_config.seq_imbalance_correction_scale
         gen_seq_imbalance_correction_scale = runtime_config.gen_seq_imbalance_correction_scale
         ctx_tokens = kwargs.get("ctx_tokens")
+        enable_chunked_prefill = kwargs.get("enable_chunked_prefill", False)
         assert ctx_tokens is not None, "ctx_tokens is required"
         balance_score = isl * b / ctx_tokens / osl
 
@@ -131,24 +132,44 @@ class VLLMBackend(BaseBackend):
                 # second pass to get ctx attn, split full isl over
                 # num_steps(=np.ceil(isl/ctx_tokens))
                 # average the ctx attn latency with num_steps to get the ctx_attention_latency
-                num_tokens = isl
-                batch_size = np.ceil(ctx_tokens / isl)
-                summary = self.run_static(
-                    model,
-                    database,
-                    RuntimeConfig(
-                        batch_size=batch_size,
-                        beam_width=1,
-                        isl=num_tokens,
-                        osl=1,
-                        prefix=prefix,
-                        seq_imbalance_correction_scale=ctx_seq_imbalance_correction_scale,
-                    ),
-                    mode="static_ctx",
-                )
+                if not enable_chunked_prefill or ctx_tokens >= isl:
+                    num_tokens = isl
+                    batch_size = np.ceil(ctx_tokens / isl)
+                    summary = self.run_static(
+                        model,
+                        database,
+                        RuntimeConfig(
+                            batch_size=batch_size,
+                            beam_width=1,
+                            isl=num_tokens,
+                            osl=1,
+                            prefix=prefix,
+                            seq_imbalance_correction_scale=ctx_seq_imbalance_correction_scale,
+                        ),
+                        mode="static_ctx",
+                    )
+                elif ctx_tokens < isl: # chunked prefill includes only ctx_tokens forward, if ctx_tokens < isl
+                    num_tokens = ctx_tokens
+                    batch_size = 1
+                    summary = self.run_static(
+                        model,
+                        database,
+                        RuntimeConfig(
+                            batch_size=batch_size,
+                            beam_width=1,
+                            isl=num_tokens,
+                            osl=1,
+                            prefix=prefix,
+                            seq_imbalance_correction_scale=ctx_seq_imbalance_correction_scale,
+                        ),
+                        mode="static_ctx",
+                    )
                 latency_dict = summary.get_context_latency_dict()
                 energy_wms_dict = summary.get_context_energy_wms_dict()
-                scale_factor = np.ceil(isl / ctx_tokens)
+                if not enable_chunked_prefill or ctx_tokens >= isl: # multi-step case, original path, bs already considered in latency, so no need to multiply isl by bs
+                    scale_factor = np.ceil(isl / ctx_tokens)        # Total number of batches to finish prefill, devide by this is to get the one-batch latency
+                else:
+                    scale_factor = 1  # when chunked prefill is enabled, we directly get the latency for ctx_tokens without needing to scale down from isl
                 ctx_attention_latency_ms = latency_dict["context_attention"] / scale_factor
                 ctx_attention_energy_wms = energy_wms_dict.get("context_attention", 0.0) / scale_factor
 
@@ -239,12 +260,14 @@ class VLLMBackend(BaseBackend):
             # (batch size here) to mitigate the impact of first round latency
             # assume we need to increase x of requests when concurrency gets larger.
             # thus capped to 4 to make it reasonable.
-            correction_factor = min(2 + (steps_to_finish_ctx - 3) / 2 / 10, 4)
-            ttft *= correction_factor
-            logger.debug(
-                f"ttft correction factor: {2 + (steps_to_finish_ctx - 3) / 2 / 10} capped to "
-                f"{correction_factor} when b: {b}, ctx_tokens: {ctx_tokens} isl {isl}"
-            )
+            # correction_factor = min(2 + (steps_to_finish_ctx - 3) / 2 / 10, 4)
+            # ttft *= correction_factor
+            # TODO on avg arrive at the previous middle point of the previous steps (e.g. 4 chunks middle is 2 chunks)
+            ttft *= 1.5
+            # logger.debug(
+            #     f"ttft correction factor: {2 + (steps_to_finish_ctx - 3) / 2 / 10} capped to "
+            #     f"{correction_factor} when b: {b}, ctx_tokens: {ctx_tokens} isl {isl}"
+            # )
 
             tpot = (mix_step_latency_ms * num_mix_steps_for_tpot_calc + genonly_step_latency_ms * num_genonly_steps) / (
                 num_mix_steps_for_tpot_calc + num_genonly_steps
@@ -413,7 +436,7 @@ class VLLMBackend(BaseBackend):
         prefix = runtime_config.prefix
         top_k = kwargs.get("top_k", 1)
         max_batch_size = kwargs.get("max_batch_size", 512)
-        ctx_stride = kwargs.get("ctx_stride", 512)
+        ctx_stride = kwargs.get("ctx_stride", 512)  # --> max_num_batched_tokens // max_ctx_tokens_search_steps 8
         enable_chunked_prefill = kwargs.get("enable_chunked_prefill", False)
 
         # when b is larger than 1024, the result is not good as the data collection is not enough
@@ -473,6 +496,7 @@ class VLLMBackend(BaseBackend):
                         seq_imbalance_correction_scale=runtime_config.seq_imbalance_correction_scale,
                     ),
                     ctx_tokens=ctx_tokens,
+                    enable_chunked_prefill=enable_chunked_prefill,
                 )
 
                 if summary.check_oom() or summary.check_kv_cache_oom():

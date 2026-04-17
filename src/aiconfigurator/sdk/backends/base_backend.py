@@ -369,19 +369,26 @@ class BaseBackend(ABC):
         Returns:
             Sorted list of num_context_tokens to sweep.
         """
-
+        MAX_NUM_BATCHED_TOKENS = 2048
+        MAX_MODEL_LEN = 16384
+        max_normal_ctx_tokens = MAX_NUM_BATCHED_TOKENS
+        max_ctx_tokens_multiple_of_isl = 4
         # Largest ctx_tokens to consider for sweeping.
-        max_ctx_tokens = max(max_normal_ctx_tokens, isl * max_ctx_tokens_multiple_of_isl)
+        max_ctx_tokens = min(max(max_normal_ctx_tokens, isl * max_ctx_tokens_multiple_of_isl), MAX_MODEL_LEN) # max(2048, 3000*2)
 
         # Sweep stride under max_normal_ctx_tokens.
-        ctx_stride = max(ctx_stride, max_normal_ctx_tokens // max_ctx_tokens_small_search_steps)
+        if enable_chunked_prefill:
+            ctx_stride = MAX_NUM_BATCHED_TOKENS // 8 # < 12.5% ERROR, and also for faster sweeping.
+            ctx_stride_large = ctx_stride * 2 # TODO assume *2
+        else:
+            ctx_stride = max(ctx_stride, max_normal_ctx_tokens // max_ctx_tokens_small_search_steps)
 
-        # Sweep stride once ctx_tokens is larger than max_normal_ctx_tokens.
-        ctx_stride_large = max(
-            1024,
-            ctx_stride,
-            max_ctx_tokens // max_ctx_tokens_search_steps,
-        )
+            # Sweep stride once ctx_tokens is larger than max_normal_ctx_tokens.
+            ctx_stride_large = max(
+                1024,
+                ctx_stride,
+                max_ctx_tokens // max_ctx_tokens_search_steps,
+            )
 
         if not enable_chunked_prefill:
             new_ctx_stride = max(isl, ctx_stride)
@@ -397,7 +404,7 @@ class BaseBackend(ABC):
         ctx_tokens_list = []
         ctx_tokens = 0
         while True:
-            if ctx_tokens < max_normal_ctx_tokens:
+            if ctx_tokens < max_normal_ctx_tokens:  # TODO when > max_normal_ctx_tokens, stide ctx_stride_large=max_normal_ctx_tokens//8 * 2
                 ctx_tokens += ctx_stride
             else:
                 ctx_tokens += ctx_stride_large
@@ -406,13 +413,13 @@ class BaseBackend(ABC):
                 break
 
             ctx_tokens_list.append(ctx_tokens)
-
         # add those just match the multiple of isl
         for i in range(1, max_ctx_tokens_multiple_of_isl + 1):
             ctx_tokens = isl * i
-            if ctx_tokens not in ctx_tokens_list:
+            if ctx_tokens not in ctx_tokens_list and ctx_tokens <= MAX_MODEL_LEN:   # cannot exceed max model len anyway even with chunked prefill
                 ctx_tokens_list.append(ctx_tokens)
         ctx_tokens_list.sort()
+        print(ctx_tokens_list)
         return ctx_tokens_list
 
     @abstractmethod
