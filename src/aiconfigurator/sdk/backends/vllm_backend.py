@@ -304,6 +304,11 @@ class VLLMBackend(BaseBackend):
                         queue_wait_steps = ttft_wait_max_queue_steps
 
             # queue_wait_steps = min(max(queue_wait_steps, 0.0), ttft_wait_max_queue_steps)
+            # TODO sihan need more accurate explain
+            # When request rate is high and queue wait steps is less than 1, we round it up to 1 step
+            # However when request rate is low, the system is under high load so the queue_wait_steps are averaged out over multiple steps, so we keep the fractional steps which is more accurate.
+            if request_rate_est > 1.0 and queue_wait_steps < 1.0:
+                queue_wait_steps = np.ceil(queue_wait_steps)
             ttft_wait_steps = ttft_wait_base_steps + queue_wait_steps
             ttft *= (1.0 + ttft_wait_steps)
             # ttft += ttft_wait_steps * mix_step_latency_ms  # convert waiting steps to ms and add to ttft
