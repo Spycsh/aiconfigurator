@@ -419,7 +419,9 @@ class BaseBackend(ABC):
             if ctx_tokens not in ctx_tokens_list and ctx_tokens <= MAX_MODEL_LEN:   # cannot exceed max model len anyway even with chunked prefill
                 ctx_tokens_list.append(ctx_tokens)
         ctx_tokens_list.sort()
-        logger.debug(ctx_tokens_list)
+        ctx_tokens_list = [ctx for ctx in ctx_tokens_list if ctx <= 2048]
+        # print(ctx_tokens_list)
+
         return ctx_tokens_list
 
     @abstractmethod

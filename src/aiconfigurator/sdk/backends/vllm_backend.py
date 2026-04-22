@@ -279,12 +279,17 @@ class VLLMBackend(BaseBackend):
                 # Usually, this is the smaller of the context window or the batch limit.
                 # MAX_NUM_BATCHED_TOKENS=2048
                 # effective_batch_capacity = min(ctx_tokens, MAX_NUM_BATCHED_TOKENS)
-                effective_batch_capacity = ctx_tokens
+                # effective_batch_capacity = ctx_tokens
 
                 # 2. Calculate service rate (Requests per second)
                 # If ISL > capacity, one prefill takes multiple steps (service rate drops)
                 # If ISL < capacity, one step handles multiple prefills (service rate rises)
-                prefill_units_per_mix_step = max(float(effective_batch_capacity) / float(isl), 1e-6)
+                # prefill_units_per_mix_step = max(float(effective_batch_capacity) / float(isl), 1e-6)
+                # safety valve" designed to prevent the model from over-penalizing TTFT when the input sequence (ISL) is massive compared to the hardware's chunk size.
+                prefill_units_per_mix_step = max(ctx_tokens / isl, 0.25)  # FIXME cat for mandy's case under max num batched tokens 2048, isl 8192, this divide into ctx tokens 768 too many chunks here
+                # FIXME now correct with MAX_NUM_BATCHED_TOKENS
+                # prefill_units_per_mix_step = max(ctx_tokens, 2048) / isl
+                # prefill_units_per_mix_step = (ctx_tokens + 2048) / 2 / isl
 
                 prefill_service_time_ms = mix_step_latency_ms / prefill_units_per_mix_step
                 prefill_service_rate = 1000.0 / prefill_service_time_ms if prefill_service_time_ms > 0 else 0.0
@@ -304,13 +309,15 @@ class VLLMBackend(BaseBackend):
                         queue_wait_steps = ttft_wait_max_queue_steps
 
             # queue_wait_steps = min(max(queue_wait_steps, 0.0), ttft_wait_max_queue_steps)
-            # TODO sihan need more accurate explain
+            # FIXME sihan need more accurate explain
             # When request rate is high and queue wait steps is less than 1, we round it up to 1 step
-            # However when request rate is low, the system is under high load so the queue_wait_steps are averaged out over multiple steps, so we keep the fractional steps which is more accurate.
-            if request_rate_est > 1.0 and queue_wait_steps < 1.0:
-                queue_wait_steps = np.ceil(queue_wait_steps)
+            # Refined: If the system is busy (high rate), we assume at least 1 step of waiting
+            if request_rate_est > 1.0:
+                queue_wait_steps = max(queue_wait_steps, 1.0)
             ttft_wait_steps = ttft_wait_base_steps + queue_wait_steps
             ttft *= (1.0 + ttft_wait_steps)
+            # if int(ttft) == 1264 and b==40: breakpoint() # ctx_tokens 512
+            # if int(ttft) == 458 and b==28: breakpoint() # ctx_tokens 512
             # ttft += ttft_wait_steps * mix_step_latency_ms  # convert waiting steps to ms and add to ttft
             logger.debug(
                 f"ttft wait modeling: base_steps={ttft_wait_base_steps}, queue_steps={queue_wait_steps}, "
