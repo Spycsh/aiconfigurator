@@ -336,6 +336,7 @@ class Task:
     num_images_per_request: int = 1
     ttft: float = 1000.0
     tpot: float = 50.0
+    no_ttft_correction: bool = False
     # When True (default), sweep TPOT over the legacy grid to build the full Pareto
     # frontier (matches v1). Set False to evaluate only the single ``tpot`` target --
     # used by the Planner, where Pareto selection happens elsewhere.
@@ -1000,6 +1001,7 @@ class Task:
             num_images_per_request=self.num_images_per_request,
             ttft=self.ttft,
             tpot=self.tpot,
+            no_ttft_correction=self.no_ttft_correction,
             request_latency=self.request_latency,
             engine_step_backend=self.engine_step_backend,
         )

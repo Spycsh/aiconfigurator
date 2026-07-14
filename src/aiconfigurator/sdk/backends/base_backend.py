@@ -1237,10 +1237,9 @@ class BaseBackend:
         # tokens alongside), so we undo that efficiency reduction first.
         _prefill_step_ms = mix_step_latency_ms / mix_efficiency if mix_efficiency > 0 else mix_step_latency_ms
         _ttft_per_request = _prefill_step_ms * np.ceil(isl / ctx_tokens) + self._prefill_dispatch_overhead_ms(model)
-        ttft = encoder_latency_ms + _ttft_per_request * self._ttft_queuing_factor(b, steps_to_finish_ctx)
-        logger.debug(
-            f"ttft: prefill_step={_prefill_step_ms:.2f}ms qf={self._ttft_queuing_factor(b, steps_to_finish_ctx):.2f}"
-        )
+        ttft_queuing_factor = 1.0 if runtime_config.no_ttft_correction else self._ttft_queuing_factor(b, steps_to_finish_ctx)
+        ttft = encoder_latency_ms + _ttft_per_request * ttft_queuing_factor
+        logger.debug(f"ttft: prefill_step={_prefill_step_ms:.2f}ms qf={ttft_queuing_factor:.2f}")
 
         # Guard against osl == 1 (no-decode), which makes both denominators zero.
         _tpot_steps = num_mix_steps_for_tpot_calc + num_genonly_steps

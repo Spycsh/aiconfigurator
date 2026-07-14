@@ -296,6 +296,12 @@ def _add_default_mode_arguments(parser):
         "may include configs that exceed --tpot.",
     )
     parser.add_argument(
+        "--no-ttft-correction",
+        action="store_true",
+        default=False,
+        help="Disable TTFT queuing-factor correction and use a factor of 1.0.",
+    )
+    parser.add_argument(
         "--request-latency",
         type=float,
         default=None,
@@ -521,6 +527,12 @@ def _add_estimate_mode_arguments(parser):
         type=int,
         default=None,
         help="Context tokens budget for IFB scheduling (agg only). Default: same as ISL.",
+    )
+    parser.add_argument(
+        "--no-ttft-correction",
+        action="store_true",
+        default=False,
+        help="Disable TTFT queuing-factor correction and use a factor of 1.0.",
     )
 
     # Shared parallelism defaults (also used as fallback for prefill/decode-specific args)
@@ -1173,6 +1185,7 @@ def build_default_tasks(
     enable_wideep: bool = False,
     moe_backend: str | None = None,
     engine_step_backend: str | None = None,
+    no_ttft_correction: bool = False,
 ) -> dict[str, Task]:
     """Build agg and disagg task configs for default mode comparison.
 
@@ -1197,6 +1210,7 @@ def build_default_tasks(
         enable_wideep: Whether to enable Wide Expert Parallelism (WideEP) for MoE models.
         moe_backend: Explicit SGLang MoE backend override.
         engine_step_backend: Experimental static latency backend ("python" or "rust").
+        no_ttft_correction: Disable TTFT queuing-factor correction when True.
 
     Returns:
         Dict with Task objects. When backend='auto', returns 6 configs
@@ -1316,6 +1330,7 @@ def build_default_tasks(
         "free_gpu_memory_fraction": free_gpu_memory_fraction,
         "max_seq_len": max_seq_len,
         "engine_step_backend": engine_step_backend,
+        "no_ttft_correction": no_ttft_correction,
     }
     if nextn and nextn > 0:
         global_kwargs["nextn"] = nextn
@@ -2050,6 +2065,7 @@ def _run_estimate_mode(args):
         free_gpu_memory_fraction=args.free_gpu_memory_fraction,
         max_seq_len=args.max_seq_len,
         engine_step_backend=args.engine_step_backend,
+        no_ttft_correction=args.no_ttft_correction,
         prefix=args.prefix,
         nextn=args.nextn,
         nextn_accept_rates=nextn_accept_rates,
@@ -2397,6 +2413,7 @@ def main(args):
             free_gpu_memory_fraction=args.free_gpu_memory_fraction,
             max_seq_len=args.max_seq_len,
             engine_step_backend=args.engine_step_backend,
+            no_ttft_correction=args.no_ttft_correction,
             enable_wideep=getattr(args, "enable_wideep", False),
             moe_backend=getattr(args, "moe_backend", None),
         )

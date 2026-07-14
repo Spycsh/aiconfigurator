@@ -75,6 +75,7 @@ _TOP_PASSTHROUGH: frozenset[str] = frozenset(
         "prefix",
         "ttft",
         "tpot",
+        "no_ttft_correction",
         "request_latency",
         "total_gpus",
         "database_mode",

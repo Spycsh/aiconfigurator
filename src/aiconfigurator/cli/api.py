@@ -158,6 +158,7 @@ def cli_default(
     generator_config: str | None = None,
     generator_dynamo_version: str | None = None,
     engine_step_backend: str | None = None,
+    no_ttft_correction: bool = False,
 ) -> CLIResult:
     """
     Run the default CLI mode: compare aggregated vs disaggregated serving.
@@ -200,6 +201,7 @@ def cli_default(
         generator_config: Path to a unified generator YAML config file.
         generator_dynamo_version: Override Dynamo version used by the generator.
         engine_step_backend: Experimental static latency backend ("python" or "rust").
+        no_ttft_correction: Disable TTFT queuing-factor correction when True.
 
     Returns:
         CLIResult with chosen experiment, best configs, pareto fronts, and throughputs.
@@ -258,6 +260,7 @@ def cli_default(
         free_gpu_memory_fraction=free_gpu_memory_fraction,
         max_seq_len=max_seq_len,
         engine_step_backend=engine_step_backend,
+        no_ttft_correction=no_ttft_correction,
     )
 
     result = _execute_and_wrap_result(tasks, mode="default", top_n=top_n, strict_sla=strict_sla)
@@ -641,6 +644,7 @@ def cli_estimate(
     free_gpu_memory_fraction: float | None = None,
     max_seq_len: int | None = None,
     engine_step_backend: str | None = None,
+    no_ttft_correction: bool = False,
     # Static-mode (and shared) extras
     prefix: int = 0,
     nextn: int = 0,
@@ -726,6 +730,7 @@ def cli_estimate(
             Controls how many KV blocks TRT-LLM pre-allocates per sequence. Defaults
             to ``isl + osl`` when ``None``.
         engine_step_backend: Experimental static latency backend ("python" or "rust").
+        no_ttft_correction: Disable TTFT queuing-factor correction when True.
         prefix: (common) Prefix cache length (subset of ``isl`` already cached).
             Applied to agg, disagg, and all static modes. Default 0.
         nextn: (common) Number of MTP/speculative draft tokens. Applied to
@@ -909,6 +914,7 @@ def cli_estimate(
             free_gpu_memory_fraction=free_gpu_memory_fraction,
             max_seq_len=max_seq_len,
             engine_step_backend=engine_step_backend,
+            no_ttft_correction=no_ttft_correction,
             prefix=prefix,
             nextn=nextn,
             nextn_accept_rates=nextn_accept_rates,
@@ -1120,6 +1126,7 @@ def _run_agg_estimate(
     free_gpu_memory_fraction=None,
     max_seq_len=None,
     engine_step_backend=None,
+    no_ttft_correction=False,
     # Common (also accepted by disagg / static)
     prefix: int = 0,
     nextn: int = 0,
@@ -1158,6 +1165,7 @@ def _run_agg_estimate(
         num_images_per_request=num_images,
         prefix=prefix,
         engine_step_backend=engine_step_backend,
+        no_ttft_correction=no_ttft_correction,
     )
 
     model = get_model(model_path, model_config, backend_name)
